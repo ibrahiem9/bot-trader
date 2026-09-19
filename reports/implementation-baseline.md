@@ -6,6 +6,13 @@ The baseline includes the frozen protocol, research engine, inactive paper
 runner, deployment examples, locked dependencies and synthetic behavior tests.
 It establishes software behavior, not historical performance or service readiness.
 
+Published for review in [PR #13](https://github.com/ibrahiem9/bot-trader/pull/13).
+Implementation commit `02cfe4253943116255635a5c17365e33ddf878b4` passed a fresh
+macOS checkout installation, all 156 tests, Ruff and CLI help. Workflow correction
+`dc84a2f` then passed the same checks in
+[GitHub Actions on Linux](https://github.com/ibrahiem9/bot-trader/actions/runs/35417538824).
+The local suite reported 575 dependency/timestamp deprecation warnings.
+
 ## Reproduce the checks
 
 Use a fresh checkout and Python 3.12 with uv 0.12.14:
