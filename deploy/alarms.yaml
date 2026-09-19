@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Optional paper bot SNS email and external missing-heartbeat alarm. Not deployed automatically.
+Parameters:
+  OwnerEmail:
+    Type: String
+    Description: Email address that must confirm the SNS subscription before activation
+Resources:
+  Notifications:
+    Type: AWS::SNS::Topic
+  OwnerSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref Notifications
+      Protocol: email
+      Endpoint: !Ref OwnerEmail
+  HeartbeatAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Paper runner missed two consecutive five-minute heartbeat periods
+      Namespace: BotTrader
+      MetricName: Heartbeat
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref Notifications
+      OKActions:
+        - !Ref Notifications
+Outputs:
+  TopicArn:
+    Value: !Ref Notifications
