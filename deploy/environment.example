@@ -1,0 +1,8 @@
+# Install outside the checkout with mode 0600. Never add real credentials here.
+APCA_API_KEY_ID=REPLACE_WITH_PAPER_KEY
+APCA_API_SECRET_KEY=REPLACE_WITH_PAPER_SECRET
+AWS_DEFAULT_REGION=us-east-1
+BOT_TRADER_SNS_TOPIC=REPLACE_WITH_CONFIRMED_TOPIC_ARN
+# Supply least-privilege AWS credentials using the AWS SDK credential chain.
+# Lightsail instances do not provide EC2 instance profiles; arrange credentials
+# separately and rotate them. Do not put credentials in unit files or git.

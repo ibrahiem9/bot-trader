@@ -1,0 +1,2 @@
+# Preserve the exact bytes hashed in the independent-source request manifest.
+research/gap-targets-20170103.csv -text whitespace=cr-at-eol
