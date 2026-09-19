@@ -12,6 +12,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
 
 @pytest.fixture(autouse=True)
