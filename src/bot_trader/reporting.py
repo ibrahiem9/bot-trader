@@ -14,6 +14,17 @@ import pandas as pd
 from .config import COST_CASES_BPS, PERIODS
 from .data import END, DataError, audit, digest, external_path, load, write_json
 
+REPORT_SCHEMA = 2
+DEVELOPMENT_VALIDATION_STAGE = "development-validation"
+HELD_OUT_STAGE = "held-out"
+STAGED_PERIODS = ("development", "validation")
+ALL_PERIODS = (*STAGED_PERIODS, "held_out")
+STRATEGIES = ("cash", "passive", "trend", "rebound")
+STAGED_ARTIFACT = "development-validation.json"
+REVIEW_EXAMPLE = "review-checkpoint.example.json"
+REVIEW_COPY = "held-out-review.json"
+HELD_OUT_LOCK = "held-out-lock.json"
+
 
 def protocol_hash() -> str:
     # Hash actual executable research rules as well as the frozen prose. An old
@@ -37,6 +48,130 @@ def _journal(root: Path, event: dict) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     (root / "attempts.jsonl").chmod(0o600)
+
+
+def _empty_qualification(reason: str) -> dict:
+    return {"eligible_strategies": [], "selected_strategy": None, "reason": reason}
+
+
+def _read_object(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        raise DataError(f"{label} cannot be read as JSON: {exc}") from None
+    if not isinstance(value, dict):
+        raise DataError(f"{label} must be a JSON object")
+    return value
+
+
+def _bytes_digest(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _expected_variants(periods) -> list[tuple[str, str, float]]:
+    return [(period, strategy, float(cost))
+            for period in periods for cost in COST_CASES_BPS for strategy in STRATEGIES]
+
+
+def _validate_results(results, periods, label: str) -> None:
+    if not isinstance(results, list):
+        raise DataError(f"{label} results must be a list")
+    expected = _expected_variants(periods)
+    actual = []
+    for run in results:
+        if not isinstance(run, dict):
+            raise DataError(f"{label} contains a non-object result")
+        try:
+            period, strategy = run["period"], run["strategy"]
+            raw_cost = run["cost_bps"]
+            if isinstance(raw_cost, bool) or not isinstance(raw_cost, (int, float)):
+                raise TypeError
+            cost = float(raw_cost)
+        except (KeyError, TypeError, ValueError):
+            raise DataError(f"{label} contains a result with incomplete metadata") from None
+        if (not isinstance(period, str) or period not in periods or
+                not isinstance(strategy, str) or strategy not in STRATEGIES or
+                not math.isfinite(cost)):
+            raise DataError(f"{label} contains an unknown or invalid variant")
+        actual.append((period, strategy, cost))
+        if (run.get("start"), run.get("end")) != PERIODS[period]:
+            raise DataError(f"{label} result date range does not match the frozen period")
+    if len(actual) != len(set(actual)) or sorted(actual) != sorted(expected):
+        raise DataError(f"{label} must contain the complete unique frozen variant set")
+
+
+def _timestamp(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DataError(f"{label} must be a nonempty timezone-aware timestamp")
+    try:
+        parsed = pd.Timestamp(value)
+    except (OverflowError, TypeError, ValueError):
+        raise DataError(f"{label} must be a valid timezone-aware timestamp") from None
+    if parsed.tzinfo is None:
+        raise DataError(f"{label} must include a timezone")
+    if parsed.tz_convert("UTC") > pd.Timestamp.now(tz="UTC"):
+        raise DataError(f"{label} cannot be in the future")
+    return value
+
+
+def _validate_review(review: dict, staged: dict, staged_hash: str, current: dict, label: str) -> None:
+    if review.get("schema") != REPORT_SCHEMA or review.get("stage") != HELD_OUT_STAGE:
+        raise DataError(f"{label} has an unsupported schema or stage")
+    if review.get("approved") is not True or not isinstance(review.get("reviewer"), str) \
+            or not review["reviewer"].strip():
+        raise DataError(f"{label} requires an approved review and nonempty reviewer")
+    if review.get("decision") != "continue_to_held_out":
+        raise DataError(f"{label} has no held-out continuation decision")
+    _timestamp(review.get("reviewed_at"), f"{label} reviewed_at")
+    required = {
+        "protocol_hash": current["protocol_hash"],
+        "manifest_sha256": current["manifest_sha256"],
+        "actions_sha256": current["actions_sha256"],
+        "fee_sha256": current["fee_sha256"],
+        "staged_artifact_sha256": staged_hash,
+    }
+    if any(review.get(key) != value for key, value in required.items()):
+        raise DataError(f"{label} hashes do not match the current staged inputs")
+    if "data_feed" in current and review.get("data_feed") != current["data_feed"]:
+        raise DataError(f"{label} feed does not match the staged inputs")
+    if review.get("periods") != list(STAGED_PERIODS):
+        raise DataError(f"{label} does not name development and validation")
+    if review.get("variants") != [list(item) for item in _expected_variants(STAGED_PERIODS)]:
+        raise DataError(f"{label} does not bind the complete staged variant set")
+    if staged.get("protocol_hash") != current["protocol_hash"]:
+        raise DataError("Staged artifact protocol hash changed")
+
+
+def _validate_staged(staged: dict, current: dict) -> None:
+    if staged.get("schema") != REPORT_SCHEMA or staged.get("stage") != DEVELOPMENT_VALIDATION_STAGE:
+        raise DataError("Development-validation artifact has an unsupported schema or stage")
+    if staged.get("status") != "awaiting_review":
+        raise DataError("Development-validation artifact is not awaiting review")
+    for key, value in current.items():
+        if staged.get(key) != value:
+            raise DataError(f"Development-validation artifact {key} does not match current inputs")
+    if staged.get("periods") != list(STAGED_PERIODS):
+        raise DataError("Development-validation artifact has unexpected periods")
+    _validate_results(staged.get("results"), STAGED_PERIODS, "Development-validation artifact")
+
+
+def _write_report(output: Path, report: dict) -> None:
+    write_json(output / "comparison.json", report)
+    (output / "comparison.md").write_text(render(report))
+    (output / "comparison.md").chmod(0o600)
+
+
+def _write_terminal(output: Path, report: dict, reason: str) -> dict:
+    report["qualification"] = _empty_qualification(reason)
+    _write_report(output, report)
+    qualification = {**report["qualification"], "data_audit_passed": False,
+                     "final_test_end": END, "protocol_hash": report["protocol_hash"],
+                     "stage": report.get("stage"), "comparison_sha256": digest(output / "comparison.json")}
+    write_json(output / "qualification.json", qualification)
+    _journal(output, {"event": "complete", "status": report["status"],
+                      "stage": report.get("stage"), "protocol_hash": report["protocol_hash"],
+                      "comparison_sha256": digest(output / "comparison.json")})
+    return report
 
 
 def _fees(path: Path | None) -> tuple[list | None, list[str]]:
@@ -158,78 +293,260 @@ def qualify(results: list[dict], data_ok: bool) -> dict:
     return {"eligible_strategies": eligible, "selected_strategy": ranked[0] if ranked else None, "screens": screens}
 
 
-def research(dataset: Path, output: Path, fee_path: Path | None = None) -> dict:
+def _base_report(stage: str, protocol: str, audit_result: dict, fee_sha256: str | None,
+                 blockers: list[str]) -> dict:
+    return {"schema": REPORT_SCHEMA, "stage": stage,
+            "status": "blocked" if blockers else "complete",
+            "protocol_hash": protocol, "created_at": datetime.now(UTC).isoformat(),
+            "blockers": blockers, "data_audit": audit_result, "fee_sha256": fee_sha256,
+            "results": [], "qualification": _empty_qualification("Evaluation incomplete")}
+
+
+def _current_metadata(protocol: str, audit_result: dict, fee_sha256: str | None) -> dict:
+    try:
+        return {"protocol_hash": protocol,
+                "manifest_sha256": audit_result["manifest_sha256"],
+                "actions_sha256": audit_result["actions_sha256"],
+                "fee_sha256": fee_sha256}
+    except (KeyError, TypeError):
+        raise DataError("Data audit did not provide the required input hashes") from None
+
+
+def _run_periods(output: Path, daily, minutes, actions, sessions, fees, protocol: str,
+                 periods: tuple[str, ...]) -> list[dict]:
     from .backtest import simulate
 
+    results = []
+    for period in periods:
+        start, end = PERIODS[period]
+        for cost in COST_CASES_BPS:
+            batch = []
+            for strategy in STRATEGIES:
+                stage = DEVELOPMENT_VALIDATION_STAGE if period in STAGED_PERIODS else HELD_OUT_STAGE
+                _journal(output, {"event": "run", "stage": stage, "period": period,
+                                  "strategy": strategy, "cost_bps": cost, "protocol_hash": protocol})
+                run = simulate(daily, minutes, actions, sessions, strategy, start, end,
+                               cost_bps=cost, monthly_expense=0.0, fee_schedule=fees)
+                run["period"] = period
+                run["operating_expenses"] = [_expense_metrics(run, value) for value in (15.0, 100.0)]
+                batch.append(run)
+            cash = next(item for item in batch if item["strategy"] == "cash")
+            for run in batch:
+                run["relative"] = relative_metrics(run, cash)
+            results.extend(batch)
+    _validate_results(results, periods, "Generated")
+    return results
+
+
+def _write_review_example(output: Path, metadata: dict, staged_hash: str) -> None:
+    example = {"schema": REPORT_SCHEMA, "stage": HELD_OUT_STAGE, "approved": False,
+               "reviewer": "", "reviewed_at": "", "decision": "continue_to_held_out",
+               **metadata, "staged_artifact_sha256": staged_hash,
+               "periods": list(STAGED_PERIODS),
+               "variants": [list(item) for item in _expected_variants(STAGED_PERIODS)]}
+    write_json(output / REVIEW_EXAMPLE, example)
+
+
+def _load_staged(output: Path, metadata: dict) -> tuple[dict, str]:
+    path = output / STAGED_ARTIFACT
+    if not path.is_file():
+        raise DataError("Development-validation artifact is missing")
+    staged_hash = digest(path)
+    staged = _read_object(path, "Development-validation artifact")
+    _validate_staged(staged, metadata)
+    return staged, staged_hash
+
+
+def _review_bytes(path: Path, output: Path, staged: dict, staged_hash: str, metadata: dict,
+                  existing_lock: dict | None) -> tuple[dict, str]:
+    try:
+        raw = path.read_bytes()
+    except (OSError, UnicodeError) as exc:
+        raise DataError(f"Review checkpoint cannot be read: {exc}") from None
+    review = _read_object_from_bytes(raw, "Review checkpoint")
+    review_hash = _bytes_digest(raw)
+    _validate_review(review, staged, staged_hash, metadata, "Review checkpoint")
+    copy_path = output / REVIEW_COPY
+    if existing_lock is None:
+        copy_path.write_bytes(raw)
+        copy_path.chmod(0o600)
+    elif not copy_path.is_file() or digest(copy_path) != existing_lock.get("review_checkpoint_sha256"):
+        raise DataError("Persisted held-out review does not match its lock")
+    return review, review_hash
+
+
+def _read_object_from_bytes(raw: bytes, label: str) -> dict:
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, TypeError, ValueError) as exc:
+        raise DataError(f"{label} cannot be read as JSON: {exc}") from None
+    if not isinstance(value, dict):
+        raise DataError(f"{label} must be a JSON object")
+    return value
+
+
+def _lock_for(metadata: dict, staged_hash: str, review_hash: str) -> dict:
+    return {"schema": REPORT_SCHEMA, "stage": HELD_OUT_STAGE, **metadata,
+            "staged_artifact_sha256": staged_hash, "review_checkpoint_sha256": review_hash}
+
+
+def _load_or_write_lock(output: Path, lock: dict) -> str:
+    path = output / HELD_OUT_LOCK
+    if path.exists():
+        existing = _read_object(path, "Held-out lock")
+        if existing != lock:
+            raise DataError("Held-out inputs, staged artifact, or review changed; retain the old record")
+    else:
+        write_json(path, lock)
+    return digest(path)
+
+
+def research(dataset: Path, output: Path, fee_path: Path | None = None,
+             stage: str = DEVELOPMENT_VALIDATION_STAGE,
+             review_checkpoint: Path | None = None) -> dict:
     output = external_path(output)
+    if stage not in {DEVELOPMENT_VALIDATION_STAGE, HELD_OUT_STAGE}:
+        raise DataError("Research stage must be development-validation or held-out")
     protocol = protocol_hash()
-    _journal(output, {"event": "attempt", "protocol_hash": protocol,
+    _journal(output, {"event": "attempt", "stage": stage, "protocol_hash": protocol,
                       "variants": ["trend-v1", "rebound-v1"], "cost_bps": list(COST_CASES_BPS)})
-    # Invalidate an earlier qualification before any possibly failing recomputation.
     write_json(output / "qualification.json", {"data_audit_passed": False, "eligible_strategies": [],
-                                               "selected_strategy": None, "reason": "Evaluation in progress"})
-    audit_result = audit(dataset)
-    fees, fee_errors = _fees(fee_path)
-    blockers = audit_result["errors"] + fee_errors
-    result = {"schema": 1, "status": "blocked" if blockers else "complete", "protocol_hash": protocol,
-              "created_at": datetime.now(UTC).isoformat(), "blockers": blockers,
-              "data_audit": audit_result, "fee_sha256": digest(fee_path) if fee_path and fee_path.is_file() else None,
-              "results": [], "qualification": {"eligible_strategies": [], "selected_strategy": None}}
-    if not blockers:
+                                               "selected_strategy": None, "stage": stage,
+                                               "reason": "Evaluation in progress"})
+    audit_result = {"passed": False, "errors": ["Audit did not complete"], "warnings": []}
+    fee_sha256 = None
+    try:
+        audit_result = audit(dataset)
+        fee_sha256 = digest(fee_path) if fee_path and fee_path.is_file() else None
+        fees, fee_errors = _fees(fee_path)
+        if not isinstance(audit_result, dict):
+            raise DataError("Data audit did not return an object")
+        audit_errors = audit_result.get("errors", [])
+        if not isinstance(audit_errors, list):
+            raise DataError("Data audit errors must be a list")
+        blockers = audit_errors + fee_errors
+        if audit_result.get("passed") is not True:
+            blockers.append("Data audit did not pass")
+        metadata = _current_metadata(protocol, audit_result, fee_sha256) if not blockers else {
+            "protocol_hash": protocol, "manifest_sha256": audit_result.get("manifest_sha256"),
+            "actions_sha256": audit_result.get("actions_sha256"), "fee_sha256": fee_sha256}
+        result = _base_report(stage, protocol, audit_result, fee_sha256, blockers)
+        if blockers:
+            return _write_terminal(output, result, "Data admission or fee review blocked evaluation")
         daily, minutes, actions, sessions, manifest = load(dataset)
         actions.attrs["audited"] = True
-        frozen_path = output / "held-out-lock.json"
-        lock = {"protocol_hash": protocol, "manifest_sha256": audit_result["manifest_sha256"],
-                "actions_sha256": audit_result["actions_sha256"], "fee_sha256": result["fee_sha256"]}
-        if frozen_path.exists() and json.loads(frozen_path.read_text()) != lock:
-            raise DataError("Held-out inputs/rules changed after evaluation; retain the old record and design a new future test")
-        write_json(frozen_path, lock)
-        for period, (start, end) in PERIODS.items():
-            for cost in COST_CASES_BPS:
-                batch = []
-                for strategy in ("cash", "passive", "trend", "rebound"):
-                    _journal(output, {"event": "run", "period": period, "strategy": strategy,
-                                      "cost_bps": cost, "protocol_hash": protocol})
-                    run = simulate(daily, minutes, actions, sessions, strategy, start, end,
-                                   cost_bps=cost, monthly_expense=0.0, fee_schedule=fees)
-                    run["period"] = period
-                    run["operating_expenses"] = [_expense_metrics(run, v) for v in (15.0, 100.0)]
-                    batch.append(run)
-                cash = next(r for r in batch if r["strategy"] == "cash")
-                for run in batch:
-                    run["relative"] = relative_metrics(run, cash)
-                result["results"].extend(batch)
-        result["qualification"] = qualify(result["results"], data_ok=True)
+        metadata["data_feed"] = manifest["feed"]
         result["data_feed"] = manifest["feed"]
-    write_json(output / "comparison.json", result)
-    (output / "comparison.md").write_text(render(result))
-    (output / "comparison.md").chmod(0o600)
-    qualification = {**result["qualification"], "data_audit_passed": not blockers,
-                     "final_test_end": END, "protocol_hash": protocol,
-                     "dataset_hash": audit_result.get("manifest_sha256"),
-                     "data_feed": result.get("data_feed"),
-                     "comparison_sha256": digest(output / "comparison.json")}
-    write_json(output / "qualification.json", qualification)
-    _journal(output, {"event": "complete", "status": result["status"], "protocol_hash": protocol,
-                      "comparison_sha256": digest(output / "comparison.json")})
-    return result
+        if stage == DEVELOPMENT_VALIDATION_STAGE:
+            if (output / STAGED_ARTIFACT).exists():
+                raise DataError("Development-validation artifact exists; use a new output directory")
+            if (output / HELD_OUT_LOCK).exists():
+                raise DataError("Held-out lock exists; staged artifact is immutable")
+            result["results"] = _run_periods(output, daily, minutes, actions, sessions, fees,
+                                              protocol, STAGED_PERIODS)
+            result["status"] = "awaiting_review"
+            result["qualification"] = _empty_qualification("Held-out test awaits explicit review")
+            result["periods"] = list(STAGED_PERIODS)
+            # Retain an independently renderable report even if a later blocked
+            # attempt replaces comparison.json. Its own digest lives elsewhere.
+            artifact = {**result, **metadata}
+            write_json(output / STAGED_ARTIFACT, artifact)
+            staged_hash = digest(output / STAGED_ARTIFACT)
+            result["staged_artifact_sha256"] = staged_hash
+            _write_review_example(output, metadata, staged_hash)
+            _write_report(output, result)
+            write_json(output / "qualification.json", {**result["qualification"],
+                       "data_audit_passed": False, "final_test_end": END,
+                       "protocol_hash": protocol, "dataset_hash": metadata["manifest_sha256"],
+                       "data_feed": manifest["feed"], "stage": stage,
+                       "comparison_sha256": digest(output / "comparison.json")})
+            _journal(output, {"event": "complete", "stage": stage, "status": result["status"],
+                              "protocol_hash": protocol, "comparison_sha256": digest(output / "comparison.json")})
+            return result
+        staged, staged_hash = _load_staged(output, metadata)
+        checkpoint_path = external_path(review_checkpoint or output / "review-checkpoint.json")
+        existing_lock = _read_object(output / HELD_OUT_LOCK, "Held-out lock") if (output / HELD_OUT_LOCK).exists() else None
+        _review, review_hash = _review_bytes(checkpoint_path, output, staged, staged_hash, metadata, existing_lock)
+        lock = _lock_for(metadata, staged_hash, review_hash)
+        lock_hash = _load_or_write_lock(output, lock)
+        held_out = _run_periods(output, daily, minutes, actions, sessions, fees, protocol, ("held_out",))
+        _validate_results(staged["results"] + held_out, ALL_PERIODS, "Final")
+        result["results"] = staged["results"] + held_out
+        result["periods"] = list(ALL_PERIODS)
+        result["staged_artifact_sha256"] = staged_hash
+        result["review_checkpoint_sha256"] = review_hash
+        result["held_out_lock_sha256"] = lock_hash
+        result["qualification"] = qualify(result["results"], data_ok=True)
+        result["status"] = "complete"
+        _write_report(output, result)
+        qualification = {**result["qualification"], "data_audit_passed": True,
+                         "final_test_end": END, "protocol_hash": protocol,
+                         "dataset_hash": metadata["manifest_sha256"], "data_feed": manifest["feed"],
+                         "stage": stage, "staged_artifact_sha256": staged_hash,
+                         "review_checkpoint_sha256": review_hash, "held_out_lock_sha256": lock_hash,
+                         "comparison_sha256": digest(output / "comparison.json")}
+        write_json(output / "qualification.json", qualification)
+        _journal(output, {"event": "complete", "stage": stage, "status": result["status"],
+                          "protocol_hash": protocol, "comparison_sha256": digest(output / "comparison.json")})
+        return result
+    except Exception as exc:  # noqa: BLE001 - every failed stage must persist a blocked result
+        result = _base_report(stage, protocol, audit_result, fee_sha256, [str(exc)])
+        return _write_terminal(output, result, str(exc))
 
 
 def verify_qualification(path: Path) -> dict:
-    q = json.loads(path.read_text())
+    q = _read_object(path, "Qualification")
     comparison_path = path.parent / "comparison.json"
     if (q.get("protocol_hash") != protocol_hash() or q.get("data_audit_passed") is not True or
-            q.get("final_test_end") != END or not comparison_path.exists() or
-            q.get("comparison_sha256") != digest(comparison_path)):
+            q.get("final_test_end") != END or q.get("stage") != HELD_OUT_STAGE or
+            not comparison_path.exists() or q.get("comparison_sha256") != digest(comparison_path)):
         raise DataError("Qualification is stale or does not match its comparison report")
-    report = json.loads(comparison_path.read_text())
-    if (report.get("status") != "complete" or not report.get("data_audit", {}).get("passed") or
-            report.get("blockers") or report.get("protocol_hash") != q["protocol_hash"]):
+    report = _read_object(comparison_path, "Comparison report")
+    data_audit = report.get("data_audit")
+    if not isinstance(data_audit, dict):
+        raise DataError("Research report has malformed data-audit metadata")
+    if (report.get("status") != "complete" or report.get("stage") != HELD_OUT_STAGE or
+            data_audit.get("passed") is not True or report.get("blockers") or
+            report.get("protocol_hash") != q["protocol_hash"]):
         raise DataError("Research report is incomplete or failed its data audit")
-    expected = qualify(report["results"], data_ok=True)
+    metadata = {"protocol_hash": protocol_hash(),
+                "manifest_sha256": data_audit.get("manifest_sha256"),
+                "actions_sha256": data_audit.get("actions_sha256"),
+                "fee_sha256": report.get("fee_sha256"), "data_feed": report.get("data_feed")}
+    staged_path = path.parent / STAGED_ARTIFACT
+    staged_hash = digest(staged_path) if staged_path.is_file() else None
+    staged = _read_object(staged_path, "Development-validation artifact")
+    _validate_staged(staged, metadata)
+    if staged_hash != q.get("staged_artifact_sha256") or staged_hash != report.get("staged_artifact_sha256"):
+        raise DataError("Qualification does not match the persisted staged artifact")
+    review_path = path.parent / REVIEW_COPY
+    try:
+        review_raw = review_path.read_bytes()
+    except OSError:
+        raise DataError("Persisted held-out review is missing") from None
+    review_hash = _bytes_digest(review_raw)
+    review = _read_object_from_bytes(review_raw, "Persisted held-out review")
+    _validate_review(review, staged, staged_hash, metadata, "Persisted held-out review")
+    if review_hash != q.get("review_checkpoint_sha256") or review_hash != report.get("review_checkpoint_sha256"):
+        raise DataError("Qualification does not match the persisted held-out review")
+    lock_path = path.parent / HELD_OUT_LOCK
+    lock = _read_object(lock_path, "Held-out lock")
+    lock_hash = digest(lock_path)
+    expected_lock = _lock_for(metadata, staged_hash, review_hash)
+    if lock != expected_lock or lock_hash != q.get("held_out_lock_sha256") \
+            or lock_hash != report.get("held_out_lock_sha256"):
+        raise DataError("Qualification does not match the persisted held-out lock")
+    _validate_results(report.get("results"), ALL_PERIODS, "Final report")
+    staged_rows = [run for run in report["results"] if run["period"] in STAGED_PERIODS]
+    if staged_rows != staged["results"]:
+        raise DataError("Final report development-validation results do not match the persisted artifact")
+    try:
+        expected = qualify(report["results"], data_ok=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DataError(f"Final report qualification data is malformed: {exc}") from None
     if (q.get("eligible_strategies") != expected["eligible_strategies"] or
             q.get("selected_strategy") != expected["selected_strategy"] or
-            q.get("dataset_hash") != report["data_audit"].get("manifest_sha256") or
+            q.get("dataset_hash") != metadata["manifest_sha256"] or
             q.get("data_feed") != report.get("data_feed")):
         raise DataError("Qualification does not match independently recomputed report screens")
     return q
@@ -255,8 +572,11 @@ def render(report: dict) -> str:
                      f"{m['trade_count']} | {m['turnover']:.2f} | {m['average_exposure']:.2%} |")
     lines += ["", "## Decision", ""]
     q = report["qualification"]
-    lines.append(f"Selected for optional paper observation: **{q['selected_strategy']}**." if q["selected_strategy"]
-                 else "Neither candidate passes all screens. Leave the runner inactive.")
+    if report.get("status") == "awaiting_review":
+        lines.append("Development and validation are complete. Held-out evaluation awaits an explicit hash-bound review checkpoint.")
+    else:
+        lines.append(f"Selected for optional paper observation: **{q['selected_strategy']}**." if q["selected_strategy"]
+                     else "Neither candidate passes all screens. Leave the runner inactive.")
     lines += ["", "Passing a screen is not proof of an edge. No automatic activation or live promotion is permitted.", ""]
     for run in report["results"]:
         if run["cost_bps"] != 5:

@@ -20,10 +20,14 @@ def parser() -> argparse.ArgumentParser:
     download.add_argument("--dataset", type=Path)
     check = sub.add_parser("audit", help="Audit coverage, prices, corporate actions and adjustment behavior")
     check.add_argument("--dataset", type=Path)
-    backtest = sub.add_parser("backtest", help="Run all frozen periods/strategies/costs after data admission")
+    backtest = sub.add_parser("backtest", help="Run staged development/validation or approved held-out research")
     backtest.add_argument("--dataset", type=Path)
     backtest.add_argument("--fees", type=Path, help="Reviewed date-effective fee schedule JSON")
     backtest.add_argument("--output", type=Path)
+    backtest.add_argument("--stage", choices=["development-validation", "held-out"],
+                          default="development-validation")
+    backtest.add_argument("--review-checkpoint", type=Path,
+                          help="Approved checkpoint required for the held-out stage")
     report = sub.add_parser("report", help="Render an existing comparison JSON without rerunning research")
     report.add_argument("--input", type=Path)
     report.add_argument("--output", type=Path)
@@ -70,9 +74,10 @@ def execute(args) -> int:
         return 0 if result["passed"] else 2
     elif args.command == "backtest":
         output = args.output or home / "research"
-        result = research(args.dataset or home / "data", output, fee_path=args.fees)
+        result = research(args.dataset or home / "data", output, fee_path=args.fees,
+                          stage=args.stage, review_checkpoint=args.review_checkpoint)
         print(f"Research {result['status']}: {output / 'comparison.md'}")
-        return 0 if result["status"] == "complete" else 2
+        return 0 if result["status"] in {"awaiting_review", "complete"} else 2
     elif args.command == "report":
         source = external_path(args.input or home / "research" / "comparison.json")
         output = external_path(args.output or home / "research" / "comparison.md")

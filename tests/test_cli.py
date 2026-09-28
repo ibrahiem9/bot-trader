@@ -4,6 +4,37 @@ import json
 from bot_trader.cli import main
 
 
+def test_backtest_defaults_to_development_validation_stage():
+    from bot_trader.cli import parser
+
+    args = parser().parse_args(["backtest"])
+    assert args.stage == "development-validation"
+    assert args.review_checkpoint is None
+
+
+def test_backtest_forwards_stage_and_review_and_accepts_awaiting_review(tmp_path, capsys, monkeypatch):
+    from bot_trader import reporting
+
+    seen = {}
+
+    def fake_research(dataset, output, fee_path=None, stage=None, review_checkpoint=None):
+        seen.update(dataset=dataset, output=output, fee_path=fee_path, stage=stage,
+                    review_checkpoint=review_checkpoint)
+        return {"status": "awaiting_review"}
+
+    monkeypatch.setattr(reporting, "research", fake_research)
+    dataset = tmp_path / "dataset"
+    fees = tmp_path / "fees.json"
+    output = tmp_path / "out"
+    checkpoint = tmp_path / "checkpoint.json"
+    assert main(["--home", str(tmp_path), "backtest", "--dataset", str(dataset),
+                 "--fees", str(fees), "--output", str(output), "--stage", "held-out",
+                 "--review-checkpoint", str(checkpoint)]) == 0
+    capsys.readouterr()
+    assert seen == {"dataset": dataset, "output": output, "fee_path": fees,
+                    "stage": "held-out", "review_checkpoint": checkpoint}
+
+
 def test_status_needs_no_credentials_and_does_not_activate(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
@@ -25,6 +56,7 @@ def test_missing_data_and_fee_file_write_blocked_report_and_cannot_activate(tmp_
     assert main(["--home", str(tmp_path), "backtest", "--fees", str(tmp_path / "missing-fees.json")]) == 2
     result = json.loads((tmp_path / "research" / "comparison.json").read_text())
     assert result["status"] == "blocked"
+    assert result["stage"] == "development-validation"
     assert result["results"] == []
     assert not json.loads((tmp_path / "research" / "qualification.json").read_text())["eligible_strategies"]
     assert main(["--home", str(tmp_path), "report"]) == 0

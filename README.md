@@ -172,8 +172,30 @@ uv run --no-sync bot-trader backtest --fees ~/.local/share/bot-trader/fees.json
 uv run --no-sync bot-trader report
 ```
 
-The backtest logs every attempt before execution. It evaluates development
-(2017–2021), validation (2022–2023) and held-out (2024–2026-09-16) periods at
+The default backtest runs development (2017–2021) and validation (2022–2023)
+only. A successful run exits 0 with status `awaiting_review`; no strategy can
+qualify at this point. Read the private `comparison.md` and inspect the
+`development-validation.json` artifact before deciding whether to continue.
+
+For an approved continuation, copy `review-checkpoint.example.json` to
+`review-checkpoint.json` in the same research directory. Keep its generated
+hashes and variant list unchanged, set `approved` to true, and supply the actual
+`reviewer` and a timezone-aware ISO timestamp in `reviewed_at`. The decision must
+remain `continue_to_held_out`. Do this only after reviewing the implementation,
+development and validation evidence; the generated example grants no approval.
+
+```sh
+uv run --no-sync bot-trader backtest --stage held-out \
+  --fees ~/.local/share/bot-trader/fees.json \
+  --review-checkpoint ~/.local/share/bot-trader/research/review-checkpoint.json
+```
+
+The held-out stage verifies the checkpoint and earlier artifact before running
+2024–2026-09-16. It retains development/validation results and evaluates only the
+held-out cases. Both stages use the same dataset, fees and output directory;
+pass the same `--dataset` and `--output` paths if you overrode their defaults.
+
+The backtest logs every attempt before execution. It evaluates each period at
 5, 10 and 20 basis points per side. All candidates and benchmarks use independent
 $5,000 starts per period. The report includes returns, excess over cash, cash-excess
 Sharpe, volatility, drawdown/recovery, turnover, exposure, trades, yearly results,
@@ -181,13 +203,19 @@ profit concentration, uncertainty and separate $15/$100 monthly expense overlays
 Personal taxes remain outside v1.
 
 Outputs are `<home>/research/comparison.json`, `comparison.md`, `qualification.json`,
-`attempts.jsonl`, and a held-out input/rule lock. Changed rules or data cannot reuse
-that locked evaluation directory. Keep earlier attempts and design a new future
-test if rules change after looking at held-out results. Do not delete history to
-make a previously inspected interval appear unseen.
+`attempts.jsonl`, the staged artifact and review example, and (after an approved
+continuation) `held-out-review.json` and `held-out-lock.json`. Qualification binds
+the final comparison to the saved staged results, exact review bytes and lock.
+An existing staged artifact cannot be overwritten by another default backtest.
+If a later blocked attempt replaces `comparison.md`, re-render the saved stage
+with `bot-trader report --input <home>/research/development-validation.json`.
+Changed rules, inputs or reviews cannot reuse a locked held-out evaluation.
+Preserve the original output directory for any new experiment and identify
+previously viewed periods. Design a new future test if rules change after looking
+at held-out results; a new directory cannot make an inspected interval unseen.
 
-Admission failure produces a blocked report and empty qualification, with exit
-code 2. Neither a missing credential nor a failed candidate is a reason to invent
+Admission or checkpoint failure produces a blocked report and empty qualification,
+with exit code 2. Neither a missing credential nor a failed candidate is a reason to invent
 returns. A passing screen still does not prove an edge.
 
 ## Paper operation

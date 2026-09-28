@@ -42,8 +42,10 @@ needed. CI runs these checks on Linux; local verification uses macOS.
   corporate actions and fees. See [comparison status](comparison.md) and issues
   #3–#6. The documented daily/minute scale and dividend-adjustment cross-checks
   need resolution before real data is admitted.
-- Staged development/validation review before held-out evaluation is tracked
-  in #7. The existing command currently evaluates all periods in one run.
+- The staged review gate tracked in #7 now stops the default backtest after
+  development/validation. Held-out execution requires a review checkpoint bound
+  to the saved results, code and inputs. Real historical evaluation under #7
+  remains blocked by input admission; implementing the gate does not complete it.
 - External paper fills, notification delivery and deployment remain unverified
   (#8–#9); neither strategy is qualified or active.
 
