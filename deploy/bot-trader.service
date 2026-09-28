@@ -1,0 +1,31 @@
+[Unit]
+Description=Qualified ETF paper strategy monitor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=bot-trader
+Group=bot-trader
+WorkingDirectory=/opt/bot-trader
+EnvironmentFile=/etc/bot-trader.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bot-trader/.venv/bin/bot-trader --home /var/lib/bot-trader paper run
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+StateDirectory=bot-trader
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bot-trader
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

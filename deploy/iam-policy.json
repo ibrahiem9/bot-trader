@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["sns:Publish", "sns:ListSubscriptionsByTopic"],
+      "Resource": "REPLACE_WITH_SNS_TOPIC_ARN"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {"StringEquals": {"cloudwatch:namespace": "BotTrader"}}
+    }
+  ]
+}

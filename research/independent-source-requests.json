@@ -1,0 +1,71 @@
+{
+  "status": "prepared_not_executed",
+  "session": "2017-01-03",
+  "regular_session_utc": {
+    "start_inclusive": "2017-01-03T14:30:00Z",
+    "end_exclusive": "2017-01-03T21:00:00Z"
+  },
+  "gap_count": 88,
+  "baseline_sha256": "a665c61f5e9685875417e9678c86f2a9bb6da7762f1e8a686fde1a3fcf15f6b7",
+  "target_csv_sha256": "5d0cb8b1536d545003852ff3d34fe2f9c9e332aad2db44b35d9406e2a06c819e",
+  "authentication": "Provider-specific bearer token supplied privately; do not use Alpaca credentials",
+  "pagination": "Follow all next_url pages; preserve request IDs and raw responses privately. Reject HTTP/API failures as missing-data evidence.",
+  "requests": [
+    {
+      "symbol": "IEF",
+      "kind": "bars",
+      "method": "GET",
+      "url": "https://api.massive.com/v2/aggs/ticker/IEF/range/1/minute/2017-01-03/2017-01-03",
+      "params": {
+        "adjusted": "false",
+        "sort": "asc",
+        "limit": 50000
+      }
+    },
+    {
+      "symbol": "IEF",
+      "kind": "trades",
+      "method": "GET",
+      "url": "https://api.massive.com/v3/trades/IEF",
+      "params": {
+        "timestamp": "2017-01-03",
+        "order": "asc",
+        "sort": "timestamp",
+        "limit": 50000
+      }
+    },
+    {
+      "symbol": "BIL",
+      "kind": "bars",
+      "method": "GET",
+      "url": "https://api.massive.com/v2/aggs/ticker/BIL/range/1/minute/2017-01-03/2017-01-03",
+      "params": {
+        "adjusted": "false",
+        "sort": "asc",
+        "limit": 50000
+      }
+    },
+    {
+      "symbol": "BIL",
+      "kind": "trades",
+      "method": "GET",
+      "url": "https://api.massive.com/v3/trades/BIL",
+      "params": {
+        "timestamp": "2017-01-03",
+        "order": "asc",
+        "sort": "timestamp",
+        "limit": 50000
+      }
+    },
+    {
+      "kind": "conditions",
+      "method": "GET",
+      "url": "https://api.massive.com/v3/reference/conditions",
+      "params": {
+        "asset_class": "stocks",
+        "data_type": "trade",
+        "limit": 1000
+      }
+    }
+  ]
+}

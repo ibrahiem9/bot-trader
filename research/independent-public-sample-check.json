@@ -1,0 +1,12 @@
+{
+  "source_url": "https://frd001.s3.us-east-2.amazonaws.com/frd_sample_etf_BIL.zip",
+  "retrieved_on": "2026-09-17",
+  "zip_sha256": "0734b24a25968446c84591c31e7448bfc847994ddc4c11c11ba6264cefd8c276",
+  "member": "BIL_1min_sample.csv",
+  "records": 5352,
+  "min_timestamp_as_published": "2026-09-02 04:00:00",
+  "max_timestamp_as_published": "2026-09-16 19:58:00",
+  "target_date": "2017-01-03",
+  "target_date_records": 0,
+  "result": "sample_does_not_cover_target_date"
+}
